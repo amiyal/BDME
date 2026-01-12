@@ -1,0 +1,649 @@
+#############BDME################
+
+# Clear workspace
+rm(list = ls(all = TRUE))
+
+# Load required library
+library(nleqslv)
+library(Ecdat)
+library(COUNT)
+library(glm2)
+library(MASS)
+library(tscount)
+library(ZINARp)
+
+# Load real data
+
+df <- read.csv("")
+# Assuming your dataset is named df and the time column is 'time'
+df$time <- as.POSIXct(df$time, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+
+# Extract year
+df$year <- format(df$time, "%Y")
+
+# Count number of earthquakes per year
+yearly_counts <- table(df$year)
+
+# View results
+print(yearly_counts)
+
+
+real_data<-yearly_counts
+real_data <- ts(real_data, start = 1900, end = 2024, frequency = 1)
+
+# Extract data 
+st<-1900
+ed<-1920
+real_data <- window(real_data, start = st, end = ed)
+
+mean(real_data)
+var(real_data)
+var(real_data)/mean(real_data)
+#acf(real_data)
+acf(real_data, lag.max = 1, plot = FALSE)$acf[2]
+#pacf(real_data)
+
+# Define helper functions "PMF of NDME distribution"
+pmfn <- function(x, p) {
+  f <- (1 - p)^2 * p^(2 * x - 1) * (x + p * (1 - p)) / (1 - p * (1 - p))^(x + 2)
+  return(f)
+}
+
+l <- function(theta, data) {
+  alpha <- theta[1]
+  p <- theta[2]
+  len <- length(data)
+  x <- vector(length = len)
+  x[1] <- (p*(1+p)) / (1 - p)
+  for (t in 2:len) {
+    l <- data[t - 1]
+    k <- data[t]
+    x[t] <- 0
+    for (i in 0:min(k, l)) {
+      x[t] <- x[t] + dbinom(x = i, size = l, prob = alpha) * pmfn(k - i, p)
+    }
+  }
+  f <- x[2:len]
+  return(f)
+}
+
+logl <- function(theta, data) {
+  ll <- l(theta, data)
+  epsilon <- .Machine$double.eps  # A very small positive constant
+  ll <- pmax(ll, epsilon)  # Replace values less than epsilon with epsilon
+  sum(-log(ll))
+}
+
+# Optimization
+theta0 <- c(0.6, 0.5)
+result <- optim(par = theta0, fn = logl, data = real_data, method = "L-BFGS-B",
+                lower = c(0, 0), upper = c(1, 1), hessian = TRUE)
+
+# Extract results
+alpha_est <- result$par[1]
+p_est <- result$par[2]
+# Calculate the inverse of the Hessian matrix
+epsilon <- 1e-8
+hessian_inv <- solve(result$hessian)
+
+
+# Extract the variances (diagonal elements of the inverse Hessian matrix)
+variances <- diag(hessian_inv)
+
+# Compute the standard errors (square root of variances)
+se_alpha <- sqrt(variances[1])
+se_theta <- sqrt(variances[2])
+
+# Display results
+cat("Estimated alpha:", alpha_est, "\n")
+cat("Standard Error of alpha:", se_alpha, "\n")
+cat("Estimated theta:", p_est, "\n")
+cat("Standard Error of theta:", se_theta, "\n")
+
+# Function to generate fitted values
+generate_fitted_values <- function(data, alpha, theta1) {
+  len <- length(data)
+  fitted <- numeric(len)
+  #fitted[1] <- real_data[1]
+  #fitted[1] <- ((theta1*(1+theta1))/(1-theta1))*(1/(1-alpha))  # Use the first real data point as the initial value
+  fitted[1] <- real_data[1]
+  for (t in 2:len) {
+    fitted[t] <- alpha * real_data[t - 1] + ((theta1*(1+theta1))/(1-theta1))  # Add mean of the error
+  }
+  return(fitted)
+}
+
+fitted_values <- generate_fitted_values(real_data,alpha_est,p_est)
+fitted_values<-ts(fitted_values, start = st, end = ed, frequency = 1)
+
+
+
+####Pearson Residuals
+m<- fitted_values
+
+generate_v <- function(data, alpha, theta1) {
+  len <- length(data)
+  fitted <- numeric(len)
+  #fitted[1]<-1
+  fitted[1] <- (alpha*((theta1*(1+theta1))/(1-theta1))+((theta1*(theta1^3 + theta1^2-theta1+1))/((1-theta1)^2)))/(1-alpha^2)  # Use the first real data point as the initial value
+  for (t in 2:len) {
+    fitted[t] <- alpha*(1-alpha) * real_data[t - 1] + ((theta1*(theta1^3 + theta1^2-theta1+1))/((1-theta1)^2))  # Add mean of the error
+  }
+  return(fitted)
+}
+
+v <- generate_v(real_data,alpha_est,p_est)
+
+p_residuals<-(real_data - m)/sqrt(v)
+
+
+# Diagnostics plots
+par(mfrow = c(2, 2))  # 2x2 plot layout
+
+
+acf(real_data, main="a) ACF",
+    lag.max = 15, 
+    col = "green", 
+    lwd = 3,  # Line width for better visibility
+    cex.main = 1,  # Title size
+    cex.lab = 1.2,  # Axis label size
+    cex.axis = 1.2,  # Axis tick size
+    xlim = c(0, 15),  # Set x-axis limit for better spacing
+    ylim = c(-0.4, 1),  # Set y-axis limit for better scaling
+    las = 1,  # Horizontal axis labels
+    plot = TRUE)  # Ensure plot is displayed
+
+pacf(real_data, main="b) PACF",
+     lag.max = 15, 
+     col = "orange", 
+     lwd = 3,  # Line width for better visibility
+     cex.main = 1,  # Title size
+     cex.lab = 1.2,  # Axis label size
+     cex.axis = 1.2,  # Axis tick size
+     xlim = c(0, 15),  # Set x-axis limit for better spacing
+     ylim = c(-0.4, 1),  # Set y-axis limit for better scaling
+     las = 1,  # Horizontal axis labels
+     plot = TRUE)  # Ensure plot is displayed
+
+# Plot observed vs fitted values
+plot(real_data, type = "o", col = "blue", pch = 16,
+     main = "c) Observed vs Fitted Values",
+     xlab = "Time", ylab = "Values", cex.main = 1.2, cex.lab = 1.5, cex.axis = 1.5)
+lines(fitted_values, type = "o", col = "red", pch = 17, lty = 2)
+
+# Add legend at bottom right
+legend("bottomright", legend = c("Observed", "Fitted"),
+       col = c("blue", "red"), lty = c(1, 2), pch = c(16, 17),
+       bty = "n", cex = 1)
+# ACF of residuals
+acf(p_residuals, main = "d) ACF of Residuals",
+    lag.max = 15, 
+    col = "red", 
+    lwd = 3,  # Line width for better visibility
+    cex.main = 1,  # Title size
+    cex.lab = 1.2,  # Axis label size
+    cex.axis = 1.2,  # Axis tick size
+    xlim = c(0, 15),  # Set x-axis limit for better spacing
+    ylim = c(-0.4, 1),  # Set y-axis limit for better scaling
+    las = 1,  # Horizontal axis labels
+    plot = TRUE)  # Ensure plot is displayed
+
+
+mean(p_residuals)
+sd(p_residuals)
+
+#####LR TEST
+
+# Extract full model log-likelihood
+loglik_full <- -result$value
+
+# Define null model log-likelihood function
+logl_null <- function(theta1, data) {
+  theta <- c(1, theta1)  
+  logl(theta, data)
+}
+
+# Initial guess for null model
+theta0_null <- 0.7
+
+# Perform optimization for null model
+result_null <- optim(par = theta0, fn = logl_null, data = real_data, method = "L-BFGS-B",
+                     lower = 0.0000000000001, upper = 0.9999999999999, hessian = TRUE)
+
+# Extract null model log-likelihood
+loglik_null <- -result_null$value
+
+# Likelihood Ratio Test
+lr_stat <- 2 * (loglik_full - loglik_null)
+p_value <- pchisq(lr_stat, df = 1, lower.tail = FALSE)
+
+# Display resultss
+
+
+cat("Full Model Log-Likelihood:", loglik_full, "\n")
+cat("Null Model Log-Likelihood:", loglik_null, "\n")
+cat("Likelihood Ratio Statistic:", lr_stat, "\n")
+cat("P-value:", p_value, "\n")
+
+# Number of parameters (phi and epsilon parameter)
+k <- 2
+
+# Number of observations
+n <- length(real_data)
+
+# Compute AIC and BIC
+aic <- -2 * as.numeric(loglik_full) + 2 * k
+bic <- -2 * as.numeric(loglik_full) + k * log(n)
+
+# Compute HAIC (Hannan-Quinn Information Criterion)
+haic <- -2 * as.numeric(loglik_full) + 2 * k * log(log(n))
+
+
+
+mu<-p_est*(1+p_est)/(1-p_est)
+sigma<-(p_est*(p_est^3 + p_est^2-p_est+1))/((1-p_est)^2)
+DI<- sigma/mu
+
+mu_x<-mu/(1-alpha_est)
+sigma_x<-(alpha_est*mu+sigma)/(1-alpha_est^2)
+DI_x<-(DI+ alpha_est)/(1+alpha_est)
+
+
+# Display results
+cat("Estimated alpha:", alpha_est, "\n")
+cat("Standard Error of alpha:", se_alpha, "\n")
+cat("Estimated theta:", p_est, "\n")
+cat("Standard Error of theta:", se_theta, "\n")
+
+cat("Full Model Log-Likelihood:", loglik_full, "\n")
+# Print AIC and BIC
+cat("AIC:", aic, "\n")
+cat("BIC:", bic, "\n")
+# Print HAIC
+cat("HAIC:", haic, "\n")
+cat("mu_x:", mu_x, "\n")
+cat("sigma_x:", sigma_x, "\n")
+cat("DI_x:", DI_x, "\n")
+
+
+#############Geometric################
+# Geometric INAR(1) model conditional PMF
+pmfg <- function(x, p) {
+  # Geometric PMF: P(Y_t = x | p) = (1 - p)^x * p
+  f <- (1 - p)^x * p
+  return(f)
+}
+
+# Define the likelihood function for the Geometric INAR(1) model
+l_geom <- function(theta, data) {
+  alpha <- theta[1]
+  p <- theta[2]
+  len <- length(data)
+  x <- vector(length = len)
+  x[1] <- (1-p) / p
+  for (t in 2:len) {
+    l <- data[t - 1]
+    k <- data[t]
+    x[t] <- 0
+    for (i in 0:min(k, l)) {
+      x[t] <- x[t] + dbinom(x = i, size = l, prob = alpha) * pmfg(k - i, p)
+    }
+  }
+  f <- x[2:len]
+  return(f)
+}
+
+# Define the log-likelihood function (negative log-likelihood for optimization)
+logl_geom <- function(theta, data) {
+  ll <- l_geom(theta, data)
+  
+  # Replace non-positive or non-finite values
+  ll[!is.finite(ll) | ll <= 1e-10] <- 1e-10
+  
+  return(sum(-log(ll)))
+}
+
+# Load real data
+
+df <- read.csv()
+# Assuming your dataset is named df and the time column is 'time'
+df$time <- as.POSIXct(df$time, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+
+# Extract year
+df$year <- format(df$time, "%Y")
+
+# Count number of earthquakes per year
+yearly_counts <- table(df$year)
+
+# View results
+print(yearly_counts)
+
+
+real_data<-yearly_counts
+real_data <- ts(real_data, start = 1900, end = 2024, frequency = 1)
+
+# Extract data 
+st<-1900
+ed<-1920
+real_data <- window(real_data, start = st, end = ed)
+# Set initial guesses for the parameters
+alpha_guess <- 0.5  # Initial guess for alpha
+p_guess <- 0.2   # Initial guess for p
+theta0 <- c(alpha_guess, p_guess)
+
+# Perform optimization to fit the Geometric INAR(1) model
+result_geom <- optim(par = theta0, fn = logl_geom, data = real_data, method = "L-BFGS-B", 
+                     lower = c(0.0000001, 0.0000001), upper = c(0.99999999999, 0.99999999999), hessian = TRUE)
+
+# Extract the estimated parameters
+alpha_est <- result_geom$par[1]
+p_est <- result_geom$par[2]
+
+# Compute Log-Likelihood for the optimized parameters
+logLik_value <- -result_geom$value  # Log-likelihood is the negative of the value returned by optim
+
+# Calculate the Hessian matrix (second derivative of the log-likelihood)
+hessian_matrix <- result_geom$hessian
+
+# Calculate the variance-covariance matrix (inverse of the Hessian matrix)
+cov_matrix <- solve(hessian_matrix)
+
+# Calculate the standard errors (square roots of the diagonal elements of the covariance matrix)
+se_alpha <- sqrt(cov_matrix[1, 1])
+se_p <- sqrt(cov_matrix[2, 2])
+
+# Number of parameters in the model
+k_geom <- length(result_geom$par)
+
+# Number of observations (data points)
+n_data_geom <- length(real_data)
+
+# Compute AIC and BIC
+AIC_value_geom <- 2 * k_geom - 2 * logLik_value
+BIC_value_geom <-  - 2 * logLik_value + log(n_data_geom) * k_geom
+
+HAIC_value_geom <- -2 * logLik_value + 2 * k_geom * log(log(n_data_geom))
+
+
+mu<-(1-p_est)/p_est
+sigma<-(1-p_est)/(p_est^2)
+DI<- sigma/mu
+  
+mu_x<-mu/(1-alpha_est)
+sigma_x<-(alpha_est*mu+sigma)/(1-alpha_est^2)
+DI_x<-(DI+ alpha_est)/(1+alpha_est)
+
+
+
+
+
+# Display results
+cat("Estimated alpha:", alpha_est, "\n")
+cat("Standard Error of alpha:", se_alpha, "\n")
+cat("Estimated p:", p_est, "\n")
+cat("Standard Error of p:", se_p, "\n")
+cat("Log-Likelihood:", logLik_value, "\n")
+cat("AIC:", AIC_value_geom, "\n")
+cat("BIC:", BIC_value_geom, "\n")
+
+cat("HAIC (Geometric INAR(1)):", HAIC_value_geom, "\n")
+
+cat("mu_x:", mu_x, "\n")
+cat("sigma_x:", sigma_x, "\n")
+cat("DI_x:", DI_x, "\n")
+
+
+
+###############Poission#################
+# Load real data
+
+df <- read.csv()
+# Assuming your dataset is named df and the time column is 'time'
+df$time <- as.POSIXct(df$time, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+
+# Extract year
+df$year <- format(df$time, "%Y")
+
+# Count number of earthquakes per year
+yearly_counts <- table(df$year)
+
+# View results
+print(yearly_counts)
+
+
+real_data<-yearly_counts
+real_data <- ts(real_data, start = 1900, end = 2024, frequency = 1)
+
+# Extract data 
+st<-1900
+ed<-1920
+real_data <- window(real_data, start = st, end = ed)
+
+# Define the PMF for the Poisson distribution
+pmfp <- function(x, lambda) {
+  # Poisson probability mass function (PMF)
+  f <- (lambda^x * exp(-lambda)) / factorial(x)
+  return(f)
+}
+
+# Define the likelihood function for the INAR(1) Poisson model
+l <- function(theta, data) {
+  alpha <- theta[1]
+  lambda <- theta[2]
+  len <- length(data)
+  x <- vector(length = len)
+  x[1] <- lambda
+  for (t in 2:len) {
+    l <- data[t - 1]
+    k <- data[t]
+    x[t] <- 0
+    for (i in 0:min(k, l)) {
+      x[t] <- x[t] + dbinom(x = i, size = l, prob = alpha) * pmfp(k - i, lambda)
+    }
+  }
+  f <- x[2:len]
+  return(f)
+}
+
+logl_poisson <- function(theta, data) {
+  ll <- l(theta, data)
+  epsilon <- .Machine$double.eps  # A very small positive constant
+  ll <- pmax(ll, epsilon)  # Replace values less than epsilon with epsilon
+  sum(-log(ll))
+}
+
+# Set initial guesses for the parameters
+alpha_guess <- 0.4  # Initial guess for alpha
+lambda_guess <- 2   # Initial guess for lambda
+theta0 <- c(alpha_guess, lambda_guess)
+
+# Perform optimization to fit the INAR(1) Poisson model
+# Perform optimization to fit the INAR(1) Poisson model using optim
+result <- optim(par = theta0, fn = logl_poisson, data = real_data, method = "L-BFGS-B", 
+                lower = c(0, 0), upper = c(1, Inf), hessian = TRUE)
+
+
+# Extract the estimated parameters
+alpha_est <- result$par[1]
+lambda_est <- result$par[2]
+
+# Compute Log-Likelihood for the optimized parameters
+logLik_value <- -result$value  # Log-likelihood is the negative of the value returned by constrOptim
+
+# Calculate the Hessian matrix (second derivative of the log-likelihood)
+# The optimization result provides the Hessian matrix
+hessian_matrix <- result$hessian
+
+# Calculate the variance-covariance matrix (inverse of the Hessian matrix)
+cov_matrix <- solve(hessian_matrix)
+
+# Calculate the standard errors (square roots of the diagonal elements of the covariance matrix)
+se_alpha <- sqrt(cov_matrix[1, 1])
+se_lambda <- sqrt(cov_matrix[2, 2])
+
+
+# Number of parameters in the model
+k_poisson <- length(result$par)
+
+# Number of observations (data points)
+n_data_poisson <- length(real_data)
+
+# Compute AIC and BIC
+AIC_value_poisson <- 2 * k_poisson - 2 * logLik_value
+BIC_value_poisson <-  - 2 * logLik_value + log(n_data_poisson) * k_poisson
+HAIC_value_poisson <- -2 * logLik_value + 2 * k_poisson * log(log(n_data_poisson))
+
+mu<- lambda_est
+sigma<-lambda_est
+DI<- sigma/mu
+
+mu_x<-mu/(1-alpha_est)
+sigma_x<-(alpha_est*mu+sigma)/(1-alpha_est^2)
+DI_x<-(DI+ alpha_est)/(1+alpha_est)
+
+# Display results
+cat("Estimated alpha:", alpha_est, "\n")
+cat("Standard Error of alpha:", se_alpha, "\n")
+cat("Estimated pi:", lambda_est, "\n")
+cat("Standard Error of pi:", se_lambda, "\n")
+cat("Log-Likelihood:", logLik_value, "\n")
+cat("AIC:", AIC_value_poisson, "\n")
+cat("BIC:", BIC_value_poisson, "\n")
+cat("HAIC (Poisson INAR(1)):", HAIC_value_poisson, "\n")
+
+cat("mu_x:", mu_x, "\n")
+cat("sigma_x:", sigma_x, "\n")
+cat("DI_x:", DI_x, "\n")
+
+##################NB####################
+
+# --- Negative Binomial PMF using built-in dnbinom for numerical stability ---
+pmf_nb <- function(x, r, p) {
+  if (x < 0 || r <= 0 || p <= 0 || p >= 1) return(0)
+  return(dnbinom(x, size = r, prob = p))
+}
+# Define the likelihood function for the Negative Binomial INAR(1) model
+l_nb <- function(theta, data) {
+  alpha <- theta[1]  # Autoregressive parameter
+  r <- theta[2]      # Dispersion parameter
+  p <- theta[3]      # Success probability
+  
+  len <- length(data)
+  x <- vector(length = len)
+  x[1] <- r * (1 - p) / p  # Expected value of the marginal Negative Binomial distribution
+  
+  for (t in 2:len) {
+    l <- data[t - 1]
+    k <- data[t]
+    x[t] <- 0
+    for (i in 0:min(k, l)) {
+      x[t] <- x[t] + dbinom(x = i, size = l, prob = alpha) * pmf_nb(k - i, r, p)
+    }
+  }
+  
+  f <- x[2:len]  # Likelihood values excluding the first value
+  return(f)
+}
+
+# Define the log-likelihood function (negative log-likelihood for optimization)
+logl_nb <- function(theta, data) {
+  ll <- l_nb(theta, data)  # Get likelihood values
+  sum(-log(ll))  # Return the negative log-likelihood
+}
+
+# Load real data
+
+df <- read.csv()
+# Assuming your dataset is named df and the time column is 'time'
+df$time <- as.POSIXct(df$time, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+
+# Extract year
+df$year <- format(df$time, "%Y")
+
+# Count number of earthquakes per year
+yearly_counts <- table(df$year)
+
+# View results
+print(yearly_counts)
+
+
+real_data<-yearly_counts
+real_data <- ts(real_data, start = 1900, end = 2024, frequency = 1)
+
+# Extract data 
+st<-1900
+ed<-1920
+real_data <- window(real_data, start = st, end = ed)
+# Set initial guesses for the parameters
+alpha_guess <- 0.3  # Initial guess for alpha
+r_guess <- 4      # Initial guess for r
+p_guess <- 0.5      # Initial guess for p
+theta0 <- c(alpha_guess, r_guess, p_guess)
+
+# Perform optimization to fit the Negative Binomial INAR(1) model
+result_nb <- optim(par = theta0, fn = logl_nb, data = real_data, method = "L-BFGS-B", 
+                   lower = c(1e-8, 1e-8, 1e-8),
+                   upper = c(0.999999999, Inf, 0.999999999),, hessian = TRUE)
+
+# Extract the estimated parameters
+alpha_est <- result_nb$par[1]
+r_est <- result_nb$par[2]
+p_est <- result_nb$par[3]
+
+# Compute Log-Likelihood for the optimized parameters
+logLik_value <- -result_nb$value  # Log-likelihood is the negative of the value returned by optim
+
+# Calculate the Hessian matrix (second derivative of the log-likelihood)
+hessian_matrix <- result_nb$hessian
+
+# Calculate the variance-covariance matrix (inverse of the Hessian matrix)
+cov_matrix <- solve(hessian_matrix)
+
+# Calculate the standard errors (square roots of the diagonal elements of the covariance matrix)
+se_alpha <- sqrt(cov_matrix[1, 1])
+se_r <- sqrt(cov_matrix[2, 2])
+se_p <- sqrt(cov_matrix[3, 3])
+
+# Number of parameters in the model
+k_nb <- length(result_nb$par)
+
+# Number of observations (data points)
+n_data_nb <- length(real_data)
+
+# Compute AIC and BIC
+AIC_value_nb <- 2 * k_nb - 2 * logLik_value
+BIC_value_nb <- -2 * logLik_value + log(n_data_nb) * k_nb
+HAIC_value_nb <- -2 * logLik_value + 2 * k_nb * log(log(n_data_nb))
+
+
+mu<-r_est * (1 - p_est) / p_est
+sigma<-r_est * (1 - p_est) / (p_est^2)
+DI<- sigma/mu
+
+mu_x<-mu/(1-alpha_est)
+sigma_x<-(alpha_est*mu+sigma)/(1-alpha_est^2)
+DI_x<-(DI+ alpha_est)/(1+alpha_est)
+
+
+
+# Display results
+
+# Display results
+cat("Estimated alpha:", alpha_est, "\n")
+cat("Standard Error of alpha:", se_alpha, "\n")
+cat("Estimated p:", p_est, "\n")
+cat("Standard Error of p:", se_p, "\n")
+
+cat("Estimated r:", r_est, "\n")
+
+
+cat("Standard Error of p:", se_r, "\n")
+
+cat("Log-Likelihood:", logLik_value, "\n")
+cat("AIC:", AIC_value_nb, "\n")
+cat("BIC:", BIC_value_nb, "\n")
+cat("HAIC (NB-INAR(1)):", HAIC_value_nb, "\n")
+
+cat("mu_x:", mu_x, "\n")
+cat("sigma_x:", sigma_x, "\n")
+cat("DI_x:", DI_x, "\n")
