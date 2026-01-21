@@ -311,7 +311,7 @@ loglik.dg <- function(par){
 }
 
 # MLE
-ml.dg <- maxLik(loglik.dg, start=c(1, mean(x)), method="NR")
+ml.dg <- maxLik(loglik.dg, start=c(1.6, 12), method="NR")
 
 shape.dg <- ml.dg$estimate[1]
 scale.dg <- ml.dg$estimate[2]
