@@ -571,7 +571,7 @@ loglik.dsgli <- function(par){
 }
 
 # MLE
-ml.dsgli <- maxLik(loglik.dsgli, start = c(0.9, 5), method = "NR")
+ml.dsgli <- maxLik(loglik.dsgli, start = c(0.9, 245), method = "NM")
 
 eta.dsgli   <- ml.dsgli$estimate[1]
 alpha.dsgli <- ml.dsgli$estimate[2]
