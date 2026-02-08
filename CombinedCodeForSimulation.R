@@ -1,26 +1,30 @@
 rm(list = ls(all = TRUE))
 library(maxLik)
 library(plyr)
-set.seed(2025)
+set.seed(2024)
 
-p0 <- 0.75
+
+#p0 <- 0.10; a_prior <- 1; b_prior <- 9
+#p0 <- 0.25; a_prior <- 3; b_prior <- 9
+#p0 <- 0.5; a_prior <- 3; b_prior <- 3
+#p0 <- 0.75; a_prior <- 9; b_prior <- 3
+p0 <- 0.90; a_prior <- 9; b_prior <- 1
+
 NN <- 1000
 n_iter <- 110000
 burn_in <- 10000
 init_p <- p0
 proposal_sd <- 0.05
-a_prior <- 9
-b_prior <- 3
+
 target_accept <- 0.3
-
-n_vals <- c(10, 20, 30, 50, 100, 200)
-
-AE.mle <- MSE.mle <- Bias.mle <- numeric(length(n_vals))
-AE.mo  <- MSE.mo  <- Bias.mo  <- numeric(length(n_vals))
-AE.mps <- MSE.mps <- Bias.mps <- numeric(length(n_vals))
-AE.po <- MSE.po <- Bias.po <- numeric(length(n_vals))
-AE.be.ip <- MSE.be.ip <- Bias.be.ip <- numeric(length(n_vals))
-AE.be.nip <- MSE.be.nip <- Bias.be.nip <- numeric(length(n_vals))
+n_vals <- c(10, 20, 30, 50, 70, 100, 200, 500)
+            
+AE.mle      <- MSE.mle    <- AB.mle    <- Bias.mle    <- MRE.mle    <- numeric(length(n_vals))
+AE.mo       <- MSE.mo     <- AB.mo     <- Bias.mo     <- MRE.mo     <- numeric(length(n_vals))
+AE.mps      <- MSE.mps    <- AB.mps    <- Bias.mps    <- MRE.mps    <- numeric(length(n_vals))
+AE.po       <- MSE.po     <- AB.po     <- Bias.po     <- MRE.po     <- numeric(length(n_vals))
+AE.be.ip    <- MSE.be.ip  <- AB.be.ip  <- Bias.be.ip  <- MRE.be.ip  <- numeric(length(n_vals))
+AE.be.nip   <- MSE.be.nip <- AB.be.nip <- Bias.be.nip <- MRE.be.nip <- numeric(length(n_vals))
 
 
 # Function to compute metrics
@@ -28,7 +32,9 @@ compute_metrics <- function(estimates, true_val) {
   c(
     AE = mean(estimates, na.rm = TRUE),
     MSE = mean((estimates - true_val)^2, na.rm = TRUE),
-    Bias = abs(mean(estimates - true_val, na.rm = TRUE))
+    AB = mean(abs(estimates - true_val), na.rm = TRUE),
+    Bias= mean(estimates - true_val, na.rm = TRUE),
+    MRE= mean(estimates / true_val, na.rm = TRUE)
   )
 }
 
@@ -44,86 +50,72 @@ pBNDME <- function(x, p) {
 
 log_likelihood <- function(data, p) {
   if (p <= 0 || p >= 1) return(-Inf)
-  sum(log(sapply(data, function(x) dBNDME(x, p))))
+  sum(log(dBNDME(data, p)))
 }
 
-log_prior <- function(p, a , b ) {
+log_posterior <- function(p, data, a, b) {
   if (p <= 0 || p >= 1) return(-Inf)
-  dbeta(p, a, b, log = TRUE)
-}
-
-##Bayes
-
-# ==== MH Sampler ====
-log_prior <- function(p, a , b ) {
-  if (p <= 0 || p >= 1) return(-Inf)
-  dbeta(p, a, b, log = TRUE)
-}
-
-log_posterior <- function(p, data, a , b) {
-  if (p <= 0 || p >= 1) return(-Inf)
-  sum(log(sapply(data, function(x) dBNDME(x, p)))) + log_prior(p, a, b)
+  sum(log(dBNDME(data, p))) + dbeta(p, a, b, log = TRUE)
 }
 
 mh_sampler_adaptive <- function(data, n_iter, init, proposal_sd, a, b, target_accept = 0.3) {
+  
   samples <- numeric(n_iter)
   samples[1] <- init
   accept <- 0
   sd_curr <- proposal_sd
   
+  logpost_curr <- log_posterior(init, data, a, b)
+  
   for (i in 2:n_iter) {
-    current <- samples[i - 1]
-    proposal <- rnorm(1, mean = current, sd = sd_curr)
+    
+    proposal <- rnorm(1, samples[i - 1], sd_curr)
+    
     if (proposal <= 0 || proposal >= 1) {
-      samples[i] <- current
+      samples[i] <- samples[i - 1]
       next
     }
     
-    log_alpha <- log_posterior(proposal, data, a, b) - log_posterior(current, data, a, b)
-    alpha <- exp(log_alpha)
+    logpost_prop <- log_posterior(proposal, data, a, b)
+    log_alpha <- logpost_prop - logpost_curr
     
-    if (runif(1) < alpha) {
+    if (runif(1) < exp(log_alpha)) {
       samples[i] <- proposal
+      logpost_curr <- logpost_prop
       accept <- accept + 1
     } else {
-      samples[i] <- current
+      samples[i] <- samples[i - 1]
     }
     
     if (i %% 100 == 0 && i <= n_iter / 2) {
       acc_rate <- accept / i
-      if (acc_rate > target_accept + 0.05) {
-        sd_curr <- sd_curr * 1.1
-      } else if (acc_rate < target_accept - 0.05) {
-        sd_curr <- sd_curr * 0.9
-      }
+      sd_curr <- if (acc_rate > target_accept + 0.05) sd_curr * 1.1
+      else if (acc_rate < target_accept - 0.05) sd_curr * 0.9
+      else sd_curr
     }
   }
-  
-  return(samples)
+  samples
 }
 
 for (k in seq_along(n_vals)) {
   n_k <- n_vals[k]
-  p.hat.mle <- p.hat.mo <- p.hat.mps <- p.hat.po<-p.hat.be.ip<-p.hat.be.nip<- numeric(NN)
+  p.hat.mle <- p.hat.mo <- p.hat.mps <- p.hat.po <- p.hat.be.ip <- p.hat.be.nip <- numeric(NN)
   
   for (ii in 1:NN) {
     # Simulate y from inverse CDF
     y <- numeric(n_k)
+    x <- numeric(n_k)
     for (i in 1:n_k) {
-      u <- runif(1)
-      q <- function(x) {
-        (2 * x + 1) * log(p0) +
-          log(1 + (1 - p0) * (x - p0^2)) -
-          (x + 2) * log(1 - p0 * (1 - p0)) -
-          log(1 - u)
-      }
-      y[i] <- tryCatch(uniroot(q, c(-0.5, 200), extendInt = "yes")$root, error = function(e) NA)
+      u=runif(1,0,1)
+      y[i] <- ceiling(uniroot(function(z) 1 - p0^z * (1 + z - p0*z) - u,c(0, 200), extendInt = "yes")$root)
+      x[i]=rbinom(1,y[i],p0)
     }
     
-    if (any(is.na(y))) next  # skip iteration if root-finding fails
+    if (any(is.na(x))) next  # skip iteration if root-finding fails
     
-    x <- ceiling(y)
     xbar <- mean(x)
+    
+    
     
     ## --- MLE Estimation ---
     loglik <- function(theta) {
@@ -146,22 +138,29 @@ for (k in seq_along(n_vals)) {
     p.hat.mo[ii] <- (-(xbar + 1) + sqrt(xbar^2 + 6 * xbar + 1)) / 2
     
     ## --- MPS Estimation ---
-    x <- sort(x)
-    fmps<- function(ppt){
-      p<-ppt[1]
-      D<-NULL
-      D[1]<-pBNDME(x[1],p)
-      D[n_k+1]<-1-pBNDME(x[n_k],p)
-      for (i in 2:n_k){
-        if(x[i]==x[i-1]){
-          D[i]<- dBNDME(x[i],p)
-          next
-        } 
-        D[i]<-pBNDME(x[i],p)-pBNDME(x[i-1],p)
+    xs <- sort(x)
+    D <- numeric(n_k + 1)
+    fmps <- function(ppt) {
+      
+      p <- ppt[1]
+      if (p <= 0 || p >= 1) return(-Inf)
+      
+      Fx <- pBNDME(xs, p)      # vectorized CDF
+      fx <- dBNDME(xs, p)      # vectorized PDF
+      
+      D[1] <- Fx[1]
+      D[n_k + 1] <- 1 - Fx[n_k]
+      
+      for (i in 2:n_k) {
+        if (xs[i] == xs[i - 1]) {
+          D[i] <- fx[i]
+        } else {
+          D[i] <- Fx[i] - Fx[i - 1]
+        }
       }
-      aux<-1/(n_k+1)*sum(log(D))
-      return(aux)
-    }                 
+      
+      mean(log(D))
+    }       
     
     amps <- tryCatch(maxBFGS(fmps, start = c(p0))$estimate, error = function(e) NA)
     if (is.double(amps[1]) && amps[1] > 0 && amps[1] < 1) {
@@ -203,34 +202,48 @@ for (k in seq_along(n_vals)) {
     posterior.nip <- samp.nip[seq(burn_in + 1, n_iter, by = 10)]
     p.hat.be.nip[ii] <- mean(posterior.nip)
     
-    cat("  Iteration:", ii, "of", NN, "for sample size", n_k, "\n")
+      cat("Iteration:", ii, "Sample size:", n_k, "\n")
     
   } # End of NN replications
   
   # summary
   AE.mle[k] <- compute_metrics(p.hat.mle, p0)[1]
   MSE.mle[k] <- compute_metrics(p.hat.mle, p0)[2]
-  Bias.mle[k] <- compute_metrics(p.hat.mle, p0)[3]
+  AB.mle[k] <- compute_metrics(p.hat.mle, p0)[3]
+  Bias.mle[k] <- compute_metrics(p.hat.mle, p0)[4]
+  MRE.mle[k] <- compute_metrics(p.hat.mle, p0)[5]
+  
   
   AE.mo[k] <- compute_metrics(p.hat.mo, p0)[1]
   MSE.mo[k] <- compute_metrics(p.hat.mo, p0)[2]
-  Bias.mo[k] <- compute_metrics(p.hat.mo, p0)[3]
+  AB.mo[k] <- compute_metrics(p.hat.mo, p0)[3]
+  Bias.mo[k] <- compute_metrics(p.hat.mo, p0)[4]
+  MRE.mo[k] <- compute_metrics(p.hat.mo, p0)[5]
   
   AE.mps[k] <- compute_metrics(p.hat.mps, p0)[1]
   MSE.mps[k] <- compute_metrics(p.hat.mps, p0)[2]
-  Bias.mps[k] <- compute_metrics(p.hat.mps, p0)[3]
+  AB.mps[k] <- compute_metrics(p.hat.mps, p0)[3]
+  Bias.mps[k] <- compute_metrics(p.hat.mps, p0)[4]
+  MRE.mps[k] <- compute_metrics(p.hat.mps, p0)[5]
+  
   
   AE.po[k] <- compute_metrics(p.hat.po, p0)[1]
   MSE.po[k] <- compute_metrics(p.hat.po, p0)[2]
-  Bias.po[k] <- compute_metrics(p.hat.po, p0)[3]
+  AB.po[k] <- compute_metrics(p.hat.po, p0)[3]
+  Bias.po[k] <- compute_metrics(p.hat.po, p0)[4]
+  MRE.po[k] <- compute_metrics(p.hat.po, p0)[5]
   
   AE.be.ip[k] <- compute_metrics(p.hat.be.ip, p0)[1]
   MSE.be.ip[k] <- compute_metrics(p.hat.be.ip, p0)[2]
-  Bias.be.ip[k] <- compute_metrics(p.hat.be.ip, p0)[3]
+  AB.be.ip[k] <- compute_metrics(p.hat.be.ip, p0)[3]
+  Bias.be.ip[k] <- compute_metrics(p.hat.be.ip, p0)[4]
+  MRE.be.ip[k] <- compute_metrics(p.hat.be.ip, p0)[5]
   
   AE.be.nip[k] <- compute_metrics(p.hat.be.nip, p0)[1]
   MSE.be.nip[k] <- compute_metrics(p.hat.be.nip, p0)[2]
-  Bias.be.nip[k] <- compute_metrics(p.hat.be.nip, p0)[3]
+  AB.be.nip[k] <- compute_metrics(p.hat.be.nip, p0)[3]
+  Bias.be.nip[k] <- compute_metrics(p.hat.be.nip, p0)[4]
+  MRE.be.nip[k] <- compute_metrics(p.hat.be.nip, p0)[5]
   
   cat("Completed sample size:", n_k, "\n")
 }
@@ -238,17 +251,13 @@ for (k in seq_along(n_vals)) {
 # Final output
 result_df <- data.frame(
   Sample_Size = n_vals,
-  AE_MLE = AE.mle, MSE_MLE = MSE.mle, Bias_MLE = Bias.mle,
-  AE_MOM = AE.mo, MSE_MOM = MSE.mo, Bias_MOM = Bias.mo,
-  AE_MPS = AE.mps, MSE_MPS = MSE.mps, Bias_MPS = Bias.mps,
-  AE_PO = AE.po, MSE_PO = MSE.po, Bias_PO = Bias.po,
-  AE_BE_IP = AE.be.ip, MSE_BE_IP = MSE.be.ip, Bias_BE_IP = Bias.be.ip,
-  AE_BE_NIP = AE.be.nip, MSE_BE_NIP = MSE.be.nip, Bias_BE_NIP = Bias.be.nip
+  AE_MLE = AE.mle, MSE_MLE = MSE.mle, AB_MLE= AB.mle, Bias_MLE = Bias.mle, MRE_MLE= MRE.mle,
+  AE_MOM = AE.mo, MSE_MOM = MSE.mo, AB_MOM= AB.mo, Bias_MOM = Bias.mo, MRE_MOM= MRE.mo,
+  AE_MPS = AE.mps, MSE_MPS = MSE.mps, AB_MPS= AB.mps, Bias_MPS = Bias.mps, MRE_MPS= MRE.mps,
+  AE_PO = AE.po, MSE_PO = MSE.po, AB_PO= AB.po,  Bias_PO = Bias.po, MRE_PO= MRE.po,
+  AE_BE_IP = AE.be.ip,  MSE_BE_IP = MSE.be.ip, AB_BE_IP= AB.be.ip,  Bias_BE_IP = Bias.be.ip, MRE_BE_IP= MRE.be.ip,
+  AE_BE_NIP = AE.be.nip, MSE_BE_NIP = MSE.be.nip, AB_BE_NIP= AB.be.nip,  Bias_BE_NIP = Bias.be.nip, MRE_BE_NIP= MRE.be.nip
   
 )
 
 print(result_df)
-write.csv(result_df, "C:/Users/Admin/Desktop/Prof.Bhupendra/BNDME_Estimation_Results1.csv", row.names = FALSE) #p=0.25
-write.csv(result_df, "C:/Users/Admin/Desktop/Prof.Bhupendra/BNDME_Estimation_Results2.csv", row.names = FALSE)#p=0.5
-write.csv(result_df, "C:/Users/Admin/Desktop/Prof.Bhupendra/BNDME_Estimation_Results3.csv", row.names = FALSE) #p=0.75
-
