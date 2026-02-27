@@ -571,7 +571,7 @@ loglik.dsgli <- function(par){
 }
 
 # MLE
-ml.dsgli <- maxLik(loglik.dsgli, start = c(0.9, 245), method = "NM")
+ml.dsgli <- maxLik(loglik.dsgli, start = c(0.9, 240), method = "NR")
 
 eta.dsgli   <- ml.dsgli$estimate[1]
 alpha.dsgli <- ml.dsgli$estimate[2]
@@ -681,114 +681,6 @@ ks.ug  <- ks.test(x, "Fx.ug")
 AIC.ug <- -2 * logLik(ml.ug) + 2 * 1
 BIC.ug <- -2 * logLik(ml.ug) + log(n)
 
-############################################################
-###### Discrete Weibull–Geometric Distribution (DWG) #######
-############################################################
-
-library(maxLik)
-
-# PMF  (Eq. 10 in the paper)
-ddwg <- function(x, p, rho, alpha){
-  if(any(p <= 0 | p >= 1 | rho <= 0 | rho >= 1 | alpha <= 0)) return(0)
-  
-  (1 - p) * (rho^(x^alpha) - rho^((x + 1)^alpha)) /
-    ((1 - p * rho^(x^alpha)) * (1 - p * rho^((x + 1)^alpha)))
-}
-
-# CDF (Eq. 12 in the paper – closed form)
-Fdwg <- function(x, p, rho, alpha){
-  1 - rho^((x + 1)^alpha) / (1 - p * rho^((x + 1)^alpha))
-}
-
-# Log-likelihood
-loglik.dwg <- function(par){
-  p     <- par[1]
-  rho   <- par[2]
-  alpha <- par[3]
-  
-  if(p <= 0 || p >= 1 || rho <= 0 || rho >= 1 || alpha <= 0) return(-Inf)
-  
-  sum(log(ddwg(x, p, rho, alpha)))
-}
-
-# MLE (Newton–Raphson, as in paper)
-ml.dwg <- maxLik(
-  loglik.dwg,
-  start  = c(0.5, 0.9, 1),
-  method = "NR"
-)
-
-# Estimates
-p.dwg     <- ml.dwg$estimate[1]
-rho.dwg   <- ml.dwg$estimate[2]
-alpha.dwg <- ml.dwg$estimate[3]
-
-# Standard errors
-se.dwg <- sqrt(diag(vcov(ml.dwg)))
-
-# CDF for KS test
-Fx.dwg <- function(q){
-  Fdwg(q, p.dwg, rho.dwg, alpha.dwg)
-}
-
-# Goodness-of-fit
-ks.dwg  <- ks.test(x, "Fx.dwg")
-AIC.dwg <- -2 * logLik(ml.dwg) + 2 * 3
-BIC.dwg <- -2 * logLik(ml.dwg) + 3 * log(n)
-
-############################################################
-############ BNPWE Distribution (Al-Bossly & Eliwa, 2022) ###
-############################################################
-
-library(maxLik)
-
-# PMF  (Eq. 5)
-dbnpwe <- function(x, alpha, beta, theta){
-  if(any(alpha <= 0 | beta <= 0 | beta >= 1 | theta <= 0)) return(0)
-
-  alpha * (1 + theta) * beta^x / (alpha + beta + alpha*theta)^(x + 1)
-}
-
-# CDF (Eq. 6 – closed form)
-Fbnpwe <- function(x, alpha, beta, theta){
-  1 - (beta / (alpha + beta + alpha*theta))^(x + 1)
-}
-
-# Log-likelihood
-loglik.bnpwe <- function(par){
-  alpha <- par[1]
-  beta  <- par[2]
-  theta <- par[3]
-
-  if(alpha <= 0 || beta <= 0 || beta >= 1 || theta <= 0) return(-Inf)
-
-  sum(log(dbnpwe(x, alpha, beta, theta)))
-}
-
-# MLE (Newton–Raphson)
-ml.bnpwe <- maxLik(
-  loglik.bnpwe,
-  start  = c(0.5, 0.5, 0.5),
-  method = "NR"
-)
-
-# Estimates
-alpha.bnpwe <- ml.bnpwe$estimate[1]
-beta.bnpwe  <- ml.bnpwe$estimate[2]
-theta.bnpwe <- ml.bnpwe$estimate[3]
-
-# Standard errors
-se.bnpwe <- sqrt(diag(vcov(ml.bnpwe)))
-
-# CDF for KS test
-Fx.bnpwe <- function(q){
-  Fbnpwe(q, alpha.bnpwe, beta.bnpwe, theta.bnpwe)
-}
-
-# GOF
-ks.bnpwe  <- ks.test(x, "Fx.bnpwe")
-AIC.bnpwe <- -2 * logLik(ml.bnpwe) + 2 * 3
-BIC.bnpwe <- -2 * logLik(ml.bnpwe) + 3 * log(n)
 
 ############################################################
 ######## Discrete Teissier Distribution (DT) ################
@@ -1044,6 +936,108 @@ ks.dinh  <- ks.test(x, "Fx.dinh")
 AIC.dinh <- -2 * logLik(ml.dinh) + 2 * 2
 BIC.dinh <- -2 * logLik(ml.dinh) + 2 * log(n)
 
+############################################################
+######## Uniform Poisson Distribution (UP) #################
+######## Gómez-Déniz (2013) ################################
+############################################################
+
+library(maxLik)
+library(hypergeo)   # for 1F1
+
+# PMF (Eq. 4)
+dUP <- function(x, lambda){
+  if(any(lambda <= 0)) return(0)
+  lambda^x * exp(-lambda) / factorial(x + 1) *
+    genhypergeo(1, x + 2, lambda)
+}
+
+# CDF (Eq. 10)
+FUP <- function(x, lambda){
+  1 - (lambda^(x + 1) * exp(-lambda) / factorial(x + 2)) *
+    genhypergeo(2, x + 3, lambda)
+}
+
+# Log-likelihood (numerically safe)
+loglik.UP <- function(par){
+  lambda <- par[1]
+  if(lambda <= 0) return(-Inf)
+
+  pmf <- dUP(x, lambda)
+  pmf[pmf <= 0] <- 1e-12
+  sum(log(pmf))
+}
+
+# Starting value from moment estimator: lambda = 2*xbar
+ml.UP <- maxLik(
+  loglik.UP,
+  start  = c(2 * xbar),
+  method = "BFGS"
+)
+
+# Estimates
+lambda.UP <- ml.UP$estimate
+se.UP     <- sqrt(diag(vcov(ml.UP)))
+
+# CDF for KS test
+Fx.UP <- function(q){
+  FUP(q, lambda.UP)
+}
+
+# Goodness-of-fit
+ks.UP  <- ks.test(x, "Fx.UP")
+AIC.UP <- -2 * logLik(ml.UP) + 2
+BIC.UP <- -2 * logLik(ml.UP) + log(n)
+
+############################################################
+###### New Discrete Exponential Distribution (NDED) #########
+############################################################
+
+# PMF
+dnded <- function(x, lambda){
+  if(lambda <= 0) return(0)
+
+  ifelse(x == 0,
+         (lambda - 1 + exp(-lambda)) / lambda,
+         ((1 - exp(-lambda))^2 * exp(-lambda * (x - 1))) / lambda)
+}
+
+# CDF
+Fnded <- function(x, lambda){
+  ifelse(x == 0,
+         (lambda - 1 + exp(-lambda)) / lambda,
+         1 - ((1 - exp(-lambda)) * exp(-lambda * x)) / lambda)
+}
+
+# Log-likelihood
+loglik.nded <- function(par){
+  lambda <- par[1]
+  if(lambda <= 0) return(-Inf)
+
+  pmf <- dnded(x, lambda)
+  pmf[pmf <= 0] <- 1e-12
+  sum(log(pmf))
+}
+
+# MLE
+ml.nded <- maxLik(
+  loglik.nded,
+  start  = c(1),
+  method = "BFGS"
+)
+
+lambda.nded <- ml.nded$estimate
+se.nded     <- sqrt(diag(vcov(ml.nded)))
+
+# KS CDF
+Fx.nded <- function(q){
+  Fnded(q, lambda.nded)
+}
+
+# Goodness-of-fit
+ks.nded  <- ks.test(x, "Fx.nded")
+AIC.nded <- -2 * logLik(ml.nded) + 2
+BIC.nded <- -2 * logLik(ml.nded) + log(n)
+
 #########################################################
 -Log Likelihood for all Fitted Models
 ########################################################
@@ -1068,17 +1062,19 @@ NegLogLik <- c(
   -logLik(ml.dspa),
   -logLik(ml.ug),
   -logLik(ml.dinh),
-  -logLik(ml.dwg),
-  -logLik(ml.bnpwe),
+  -logLik(ml.UP),
+-logLik(ml.nded),
   -logLik(ml.dt),
   -logLik(ml.BPA),
   -logLik(ml.DME),
   -logLik(ml.UPA)
 )
+
 ############################################################
 ############################################################
 ######################## Results Table #####################
 ############################################################
+
 results <- data.frame(
   Model = c("BDME","Poisson","Binomial","Shifted Geometric",
             "Negative Binomial","Discrete Perks","Discrete Weibull",
@@ -1087,9 +1083,9 @@ results <- data.frame(
             "Exponentiated Discrete Lindley","Exponentiated Geometric",
             "Two Parameter Discrete Lindley","Poisson–XGamma",
             "DsGLi","DsPA","Uniform–Geometric","DINH",
-            "Discrete Weibull–Geometric","BNPWE","Discrete Teissier",
-            "Binomial Poisson–Ailamujia","DME",
-            "Uniform Poisson–Ailamujia"),
+            "Uniform Poisson","New Discrete Exponential",
+            "Discrete Teissier","Binomial Poisson–Ailamujia",
+            "DME","Uniform Poisson–Ailamujia"),
 
   MLE_SE = c(
     paste0(round(p.bdme,4)," (",round(se.bdme,4),")"),
@@ -1123,13 +1119,10 @@ results <- data.frame(
     paste0("λ=",round(lambda.dspa,4),", β=",round(beta.dspa,4),
            " (",paste(round(se.dspa,4),collapse=", "),")"),
     paste0("p=",round(p.ug,4)," (",round(se.ug,4),")"),
-paste0("α=",round(alpha.dinh,4),", λ=",round(lambda.dinh,4),
+    paste0("α=",round(alpha.dinh,4),", λ=",round(lambda.dinh,4),
            " (",paste(round(se.dinh,4),collapse=", "),")"),
-    paste0("p=",round(p.dwg,4),", ρ=",round(rho.dwg,4),", α=",round(alpha.dwg,4),
-           " (",paste(round(se.dwg,4),collapse=", "),")"),
-    paste0("α=",round(alpha.bnpwe,4),", β=",round(beta.bnpwe,4),
-           ", θ=",round(theta.bnpwe,4),
-           " (",paste(round(se.bnpwe,4),collapse=", "),")"),
+    paste0("λ=",round(lambda.UP,4)," (",round(se.UP,4),")"),
+    paste0("λ=",round(lambda.nded,4)," (",round(se.nded,4),")"),
     paste0("θ=",round(theta.dt,4)," (",round(se.dt,4),")"),
     paste0("α=",round(alpha.BPA,4),", p=",round(p.BPA,4),
            " (",paste(round(se.BPA,4),collapse=", "),")"),
@@ -1137,23 +1130,21 @@ paste0("α=",round(alpha.dinh,4),", λ=",round(lambda.dinh,4),
     paste0("α=",round(alpha.UPA,4)," (",round(se.UPA,4),")")
   ),
 
-NegLogLik = as.numeric(NegLogLik),
+  NegLogLik = as.numeric(NegLogLik),
 
   AIC = c(AIC.bdme, AIC.pois, AIC.bin, AIC.sgeom,
           AIC.nb, AIC.dp, AIC.dw, AIC.gp, AIC.dlog,
           AIC.dburr, AIC.dg, AIC.dlin2,
           AIC.edl, AIC.eg, AIC.tdl, AIC.pxg,
-          AIC.dsgli, AIC.dspa, AIC.ug,  AIC.dinh, AIC.dwg,
-          AIC.bnpwe, AIC.dt, AIC.BPA, AIC.DME,
-          AIC.UPA),
+          AIC.dsgli, AIC.dspa, AIC.ug, AIC.dinh,
+          AIC.UP, AIC.nded, AIC.dt, AIC.BPA, AIC.DME, AIC.UPA),
 
   BIC = c(BIC.bdme, BIC.pois, BIC.bin, BIC.sgeom,
           BIC.nb, BIC.dp, BIC.dw, BIC.gp, BIC.dlog,
           BIC.dburr, BIC.dg, BIC.dlin2,
           BIC.edl, BIC.eg, BIC.tdl, BIC.pxg,
-          BIC.dsgli, BIC.dspa, BIC.ug, BIC.dinh,BIC.dwg,
-          BIC.bnpwe, BIC.dt, BIC.BPA, BIC.DME,
-          BIC.UPA),
+          BIC.dsgli, BIC.dspa, BIC.ug, BIC.dinh,
+          BIC.UP, BIC.nded, BIC.dt, BIC.BPA, BIC.DME, BIC.UPA),
 
   KS = c(ks.bdme$statistic, ks.pois$statistic, ks.bin$statistic,
          ks.sgeom$statistic, ks.nb$statistic, ks.dp$statistic,
@@ -1161,9 +1152,9 @@ NegLogLik = as.numeric(NegLogLik),
          ks.dburr$statistic, ks.dg$statistic,
          ks.dlin2$statistic, ks.edl$statistic, ks.eg$statistic,
          ks.tdl$statistic, ks.pxg$statistic, ks.dsgli$statistic,
-         ks.dspa$statistic, ks.ug$statistic, ks.dinh$statistic, ks.dwg$statistic,
-         ks.bnpwe$statistic, ks.dt$statistic, ks.BPA$statistic,
-         ks.DME$statistic, ks.UPA$statistic),
+         ks.dspa$statistic, ks.ug$statistic, ks.dinh$statistic,
+         ks.UP$statistic, ks.nded$statistic, ks.dt$statistic,
+         ks.BPA$statistic, ks.DME$statistic, ks.UPA$statistic),
 
   KS_p = c(ks.bdme$p.value, ks.pois$p.value, ks.bin$p.value,
            ks.sgeom$p.value, ks.nb$p.value, ks.dp$p.value,
@@ -1171,9 +1162,10 @@ NegLogLik = as.numeric(NegLogLik),
            ks.dburr$p.value, ks.dg$p.value,
            ks.dlin2$p.value, ks.edl$p.value, ks.eg$p.value,
            ks.tdl$p.value, ks.pxg$p.value, ks.dsgli$p.value,
-           ks.dspa$p.value, ks.ug$p.value, ks.dinh$p.value, ks.dwg$p.value,
-           ks.bnpwe$p.value, ks.dt$p.value, ks.BPA$p.value,
-           ks.DME$p.value, ks.UPA$p.value)
+           ks.dspa$p.value, ks.ug$p.value, ks.dinh$p.value,
+           ks.UP$p.value, ks.nded$p.value, ks.dt$p.value,
+           ks.BPA$p.value, ks.DME$p.value, ks.UPA$p.value)
 )
 
 print(results)
+
