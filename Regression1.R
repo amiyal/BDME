@@ -4,12 +4,10 @@ library(MASS)
 library(COUNT)
 
 # Load data
-data(azdrg112)
-df <- azdrg112
-y <- df$los  
-
-# Final formula with only significant covariates
-final_formula <- los ~ type1 + gender + age75
+data("Bids")
+df <- Bids
+y <- df$numbids
+final_formula <-numbids ~ weeks  + bidprem + insthold + size + leglrest + rearest + finrest + regulatn + whtknght
 
 # ---------------- Poisson Model ----------------
 poisson_model <- glm(final_formula, data = df, family = poisson(link = "log"))
