@@ -15,7 +15,6 @@ library(ZINARp)
 # Load real data
 
 df <- read.csv("")
-# Assuming your dataset is named df and the time column is 'time'
 df$time <- as.POSIXct(df$time, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
 
 # Extract year
@@ -170,8 +169,6 @@ plot(real_data, type = "o", col = "blue", pch = 16,
      main = "c) Observed vs Fitted Values",
      xlab = "Time", ylab = "Values", cex.main = 1.2, cex.lab = 1.5, cex.axis = 1.5)
 lines(fitted_values, type = "o", col = "red", pch = 17, lty = 2)
-
-# Add legend at bottom right
 legend("bottomright", legend = c("Observed", "Fitted"),
        col = c("blue", "red"), lty = c(1, 2), pch = c(16, 17),
        bty = "n", cex = 1)
@@ -624,9 +621,6 @@ mu_x<-mu/(1-alpha_est)
 sigma_x<-(alpha_est*mu+sigma)/(1-alpha_est^2)
 DI_x<-(DI+ alpha_est)/(1+alpha_est)
 
-
-
-# Display results
 
 # Display results
 cat("Estimated alpha:", alpha_est, "\n")
